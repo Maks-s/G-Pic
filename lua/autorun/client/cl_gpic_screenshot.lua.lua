@@ -39,6 +39,59 @@ local function openScreenMenu(screen)
 	local screenH = ScrH()+8 -- frame is a little bit shifted
 	local screenW = ScrW()+8
 
+	local pencilMode = false
+	local pixelToDo = {}
+	local currentColor = Color(255,255,255,255)
+	local cropMode = false
+	local cropSelection = {}
+
+	local function buildPath(fromX, fromY, toX, toY)
+		local size = 5 -- default size
+
+		if fromX == toX and fromY == toY then return end -- skip when cursor doesn't move
+
+		if fromX > toX then -- swap values
+			local temp = toX
+			toX = fromX
+			fromX = temp
+			temp = toY
+			toY = fromY
+			fromY = temp
+		end
+
+		local bl = {} -- bottom left
+		local ul = {} -- upper left
+		local ur = {} -- upper right
+		local br = {} -- bottom right
+
+		size = size / 2
+
+		local ATOP = math.atan( (toY - fromY) / (toX - fromX) ) -- Angle To Other Point
+
+		local offsetX = math.sin(ATOP) * size
+		local offsetY = math.cos(ATOP) * size
+
+		ul.x = fromX + offsetX
+		bl.x = fromX - offsetX
+		ur.x = toX + offsetX
+		br.x = toX - offsetX
+
+		ul.y = fromY - offsetY
+		bl.y = fromY + offsetY
+		ur.y = toY - offsetY
+		br.y = toY + offsetY
+
+		pixelToDo[ #pixelToDo + 1 ] = {
+			v = {
+				bl,
+				ul,
+				ur,
+				br
+			},
+			c = currentColor
+		}
+	end
+
 	local html = vgui.Create("DHTML")
 	html:SetSize(screenW,screenH)
 	html:SetHTML([[<img src="data:image/jpeg;base64, ]]..util.Base64Encode(screen)..[["/><style>body{overflow:hidden;}</style>]])
@@ -58,27 +111,32 @@ local function openScreenMenu(screen)
 		html:Remove()
 	end
 
-	local pencilMode = false
-	local pixelToDo = {}
-	local currentColor = Color(255,255,255,255)
-	local cropMode = false
-	local cropSelection = {}
+	local lastCursorPos = {-42,0}
 
 	local overPanel = vgui.Create("DPanel",html)
 	overPanel:SetPos(0, 0)
 	overPanel:SetSize(screenW,screenH)
 	function overPanel:Paint()
+		draw.NoTexture()
 		for i=1, #pixelToDo do
-			draw.RoundedBox(0, pixelToDo[i].x, pixelToDo[i].y,5,5, pixelToDo[i].c)
+			surface.SetDrawColor(pixelToDo[i].c)
+			surface.DrawPoly(pixelToDo[i].v)
 		end
 		if pencilMode then
-			draw.RoundedBox(0, mouseX()-2,mouseY()-3,5,5, currentColor)
+			surface.SetDrawColor(currentColor)
+			surface.DrawRect(mouseX()-2,mouseY()-3,5,5)
 			if input.IsMouseDown(MOUSE_FIRST) and self:IsHovered() then -- if mouse down & not clicking on a button
-				table.insert(pixelToDo, {
-					x = mouseX()-2,
-					y = mouseY()-3,
-					c = currentColor
-				})
+				if lastCursorPos[1] == -42 then
+					lastCursorPos = { mouseX(), mouseY() }
+				else
+					local temp = { mouseX(), mouseY() }
+					if temp[1] ~= lastCursorPos[1] or temp[2] ~= lastCursorPos[2] then
+						buildPath(lastCursorPos[1],lastCursorPos[2],temp[1],temp[2])
+					end
+					lastCursorPos = { mouseX(), mouseY() }
+				end
+			elseif lastCursorPos[1] ~= -42 then
+				lastCursorPos[1] = -42
 			end
 		end
 		if cropMode and cropSelection[1] then
@@ -119,37 +177,41 @@ local function openScreenMenu(screen)
 		end
 	end
 	function overPanel:OnMousePressed(code)
-		if !cropMode or code ~= MOUSE_FIRST then return end
-		cropSelection[3] = nil
-		cropSelection[1] = { mouseX(), mouseY() }
+		if code ~= MOUSE_FIRST then return end
+		if cropMode then
+			cropSelection[3] = nil
+			cropSelection[1] = { mouseX(), mouseY() }
+		end
 	end
 	function overPanel:OnMouseReleased(code)
-		if !cropMode or code ~= MOUSE_FIRST then return end
-		cropSelection[2] = { mouseX(), mouseY() }
-		cropMode = false
+		if code ~= MOUSE_FIRST then return end
+		if cropMode then
+			cropSelection[2] = { mouseX(), mouseY() }
+			cropMode = false
 
-		local negX = cropSelection[1][1] < mouseX()
-		local negY = cropSelection[1][2] < mouseY()
+			local negX = cropSelection[1][1] < mouseX()
+			local negY = cropSelection[1][2] < mouseY()
 
-		local minX = negX and cropSelection[1][1] or mouseX()
-		local maxX = negX and mouseX() or cropSelection[1][1]
-		local minY = negY and cropSelection[1][2] or mouseY()
-		local maxY = negY and mouseY() or cropSelection[1][2]
+			local minX = negX and cropSelection[1][1] or mouseX()
+			local maxX = negX and mouseX() or cropSelection[1][1]
+			local minY = negY and cropSelection[1][2] or mouseY()
+			local maxY = negY and mouseY() or cropSelection[1][2]
 
-		local width = maxX - minX
+			local width = maxX - minX
 
-		cropSelection[3] = {
-			minX,
-			maxX,
-			minY,
-			maxY,
-			width,
-			screenW - (maxX),
-			screenH - (maxY)
-		}
+			cropSelection[3] = {
+				minX,
+				maxX,
+				minY,
+				maxY,
+				width,
+				screenW - (maxX),
+				screenH - (maxY)
+			}
 
-		cropSelection[1] = nil
-		cropSelection[2] = nil
+			cropSelection[1] = nil
+			cropSelection[2] = nil
+		end
 	end
 
 	local colorButton = vgui.Create("DButton",html)
@@ -259,11 +321,14 @@ local function openScreenMenu(screen)
 			send:SetVisible(false)
 			pencil:SetVisible(false)
 			colorButton:SetVisible(false)
+			colorChoser:SetVisible(false)
+			cropButton:SetVisible(false)
 			timer.Simple(0.5, function() -- Make sure only the screenshot is visible
 				screenshot( function(screen)
 					notification.AddProgress(1, "Uploading your screenshot...")
 					http.Post("https://g-pic.com/upload.php", { base64 = util.Base64Encode(screen) }, function(response, _,_, code)
 						notification.Kill(1)
+						print(response)
 						local response = util.JSONToTable(response)
 						if code == 200 then
 							if !response["shareUrl"] then
